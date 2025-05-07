@@ -214,10 +214,9 @@ const callOllamaStream = async (prompt, onChunk) => {
 
 function App() {
   const [input, setInput] = useState('');
-  const [aiOutput, setAiOutput] = useState('');
+  const [aiExplanation, setAiExplanation] = useState('');
   const [editorLanguage, setEditorLanguage] = useState("javascript");
   const [history, setHistory] = useState([]);
-  const [isLoading, setIsLoading] = useState(false);
   const editorRef = useRef(null);
 
   const detectLanguage = (code) => {
@@ -242,6 +241,15 @@ function App() {
     return code;
   };
 
+  const extractCodeBlock = (text) => {
+    const match = text.match(/```[a-z]*\n([\s\S]*?)```/);
+    return match ? match[1] : text;
+  };
+
+  const extractExplanationText = (text) => {
+    return text.replace(/```[a-z]*\n([\s\S]*?)```/, '').trim();
+  };
+
   const handleEditorMount = (editor) => {
     editorRef.current = editor;
   };
@@ -249,52 +257,49 @@ function App() {
   const handleSend = async () => {
     if (!input.trim()) return;
     let streamed = "";
-    setAiOutput("");
-    setIsLoading(true);
+    setAiExplanation("");
     if (editorRef.current) editorRef.current.setValue("");
 
-    await callOllamaStream(input, (chunk) => {
+    await callOllamaStream(input + `\nOnly give code in ${editorLanguage} with no explanation`, (chunk) => {
       streamed += chunk;
-      const cleanChunk = streamed.replace(/```[a-z]*|```/g, '').replace(/▍$/, '').trim();
-      const codeWithCursor = cleanChunk + "▍";
-
-      const lang = detectLanguage(cleanChunk);
-      setEditorLanguage(lang);
-      setAiOutput(cleanChunk);
-
+      const clean = streamed.replace(/▍$/, "");
+      const codeOnly = extractCodeBlock(clean);
       if (editorRef.current) {
-        editorRef.current.setValue(codeWithCursor);
+        editorRef.current.setValue(codeOnly);
         editorRef.current.setScrollTop(editorRef.current.getScrollHeight());
       }
     });
 
-    const cleanFinal = streamed.replace(/```[a-z]*|```/g, '').replace(/▍/g, '').trim();
-    const lang = detectLanguage(cleanFinal);
-    if (editorRef.current) editorRef.current.setValue(cleanFinal);
-    setAiOutput(cleanFinal);
-    setEditorLanguage(lang);
-    setHistory(prev => [...prev, { question: input, answer: cleanFinal }]);
+    setHistory(prev => [...prev, { question: input, answer: streamed }]);
     setInput("");
-    setIsLoading(false);
   };
 
   const handleImprove = () => {
     const code = editorRef.current.getValue();
-    setInput(`Improve the following code:\n\n${code}`);
+    setInput(`Improve the following ${editorLanguage} code:\n\n${code}`);
   };
 
-  const handleExplain = () => {
+  const handleExplain = async () => {
     const code = editorRef.current.getValue();
-    setInput(`Explain this code line by line:\n\n${code}`);
+    let streamed = "";
+    setAiExplanation("");
+
+    await callOllamaStream(`Explain this ${editorLanguage} code in detail:\n\n${code}`, (chunk) => {
+      streamed += chunk;
+      setAiExplanation(extractExplanationText(streamed));
+    });
+
+    setHistory(prev => [...prev, { question: `Explain: ${code.slice(0, 30)}...`, answer: streamed }]);
   };
 
   return (
-    <div className="flex h-screen w-screen bg-gray-50">
+    <div className="flex h-screen w-screen">
       {/* Sidebar */}
       <div className="w-1/5 p-4 bg-gray-100 border-r flex flex-col">
-        <h2 className="text-lg font-bold mb-2">🧠 Chat</h2>
+        <h2 className="text-lg font-bold mb-1">🧠 Chat</h2>
+        <label className="text-xs mb-1 font-semibold">Editor Language</label>
         <select
-          className="mb-2 border rounded p-1"
+          className="mb-2 p-1 border rounded"
           value={editorLanguage}
           onChange={(e) => setEditorLanguage(e.target.value)}
         >
@@ -303,13 +308,14 @@ function App() {
           <option value="cpp">C++</option>
           <option value="java">Java</option>
         </select>
+
         <textarea
-          className="w-full h-48 p-2 border rounded resize-y max-h-48 overflow-y-auto"
+          className="w-full h-48 p-2 border rounded resize-none"
           placeholder="Ask anything..."
           value={input}
           onChange={(e) => setInput(e.target.value)}
         />
-        <button onClick={handleSend} className="mt-2 bg-blue-500 text-white py-2 rounded hover:bg-blue-600">{isLoading ? "Loading..." : "Send"}</button>
+        <button onClick={handleSend} className="mt-2 bg-blue-500 text-white py-2 rounded hover:bg-blue-600">Send</button>
         <button onClick={handleImprove} className="mt-2 bg-yellow-500 text-white py-2 rounded hover:bg-yellow-600">Improve Code</button>
         <button onClick={handleExplain} className="mt-2 bg-purple-500 text-white py-2 rounded hover:bg-purple-600">Explain Code</button>
       </div>
@@ -322,19 +328,19 @@ function App() {
           defaultValue="// Write your code here..."
           theme="vs-dark"
           onMount={handleEditorMount}
-          options={{ wordWrap: "on" }}
         />
       </div>
 
       {/* Output */}
-      <div className="w-1/5 p-4 bg-white border-l flex flex-col">
+      <div className="w-1/5 p-4 bg-gray-50 border-l flex flex-col">
         <h2 className="text-lg font-bold mb-2">💡 Explanation</h2>
-        <div className="bg-yellow-50 border h-64 p-3 rounded overflow-y-auto whitespace-pre-wrap text-sm font-mono text-gray-800">
-          {aiOutput || '// AI responses will appear here'}
+        <div className="bg-yellow-50 border p-2 rounded overflow-y-auto text-sm whitespace-pre-wrap flex-1">
+          {aiExplanation || '// Click "Explain Code" to view explanation'}
         </div>
-        <div className="mt-4 text-sm">
+
+        <div className="mt-4 text-sm max-h-48 overflow-y-auto">
           <h3 className="font-semibold mb-1">🕘 History</h3>
-          <ul className="space-y-1 max-h-40 overflow-y-auto">
+          <ul className="space-y-1">
             {history.map((item, i) => (
               <li key={i} className="text-gray-600 border-b pb-1">
                 <strong>Q:</strong> {item.question}<br />
@@ -349,4 +355,5 @@ function App() {
 }
 
 export default App;
+
 
